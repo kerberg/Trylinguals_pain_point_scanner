@@ -2,8 +2,8 @@
 Content Scraper Agent
 =====================
 Purpose : Pull posts and top comments from the ranked subreddit list.
-          Uses public Reddit JSON endpoints — no API credentials required.
-          Add .json to any Reddit URL to get machine-readable data.
+          Uses Reddit OAuth app-only auth when credentials are present.
+          Falls back to public Reddit JSON endpoints when OAuth is unavailable.
 Schedule: Weekly (runs every Monday via GitHub Actions).
 
 Input  : /knowledge/subreddit-index.json
@@ -31,6 +31,7 @@ import json
 import logging
 import os
 import time
+from base64 import b64encode
 from datetime import datetime, timezone, timedelta
 
 import requests
@@ -41,7 +42,12 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-USER_AGENT           = os.environ.get("REDDIT_USER_AGENT", "TryLinguals_PainPointScanner/1.0")
+USER_AGENT           = os.environ.get(
+    "REDDIT_USER_AGENT",
+    "linux:com.trylinguals.painpointscanner:v1.1 (by /u/trylinguals_scanner)",
+)
+REDDIT_CLIENT_ID     = os.environ.get("REDDIT_CLIENT_ID", "").strip()
+REDDIT_CLIENT_SECRET = os.environ.get("REDDIT_CLIENT_SECRET", "").strip()
 SUBREDDIT_INDEX_PATH = "knowledge/subreddit-index.json"
 RAW_OUTPUT_DIR       = "output/raw"
 
@@ -50,19 +56,73 @@ COMMENTS_PER_POST    = 5
 LOOKBACK_DAYS        = 7
 REQUEST_PAUSE        = 2.0  # seconds — polite crawl rate for public endpoints
 
+_TOKEN_CACHE: dict[str, float | str] = {
+    "access_token": "",
+    "expires_at": 0.0,
+}
+_MISSING_OAUTH_WARNING_LOGGED = False
+
 
 # ---------------------------------------------------------------------------
 # HTTP helper
 # ---------------------------------------------------------------------------
 
+def _get_oauth_token() -> str | None:
+    """Fetch or reuse an app-only OAuth token for oauth.reddit.com endpoints."""
+    global _MISSING_OAUTH_WARNING_LOGGED
+
+    if not REDDIT_CLIENT_ID or not REDDIT_CLIENT_SECRET:
+        if not _MISSING_OAUTH_WARNING_LOGGED:
+            logger.warning(
+                "REDDIT_CLIENT_ID/REDDIT_CLIENT_SECRET not set; using anonymous Reddit endpoints (more likely to be blocked in CI)"
+            )
+            _MISSING_OAUTH_WARNING_LOGGED = True
+        return None
+
+    now = time.time()
+    if _TOKEN_CACHE["access_token"] and now < float(_TOKEN_CACHE["expires_at"]):
+        return str(_TOKEN_CACHE["access_token"])
+
+    basic = b64encode(f"{REDDIT_CLIENT_ID}:{REDDIT_CLIENT_SECRET}".encode("utf-8")).decode("ascii")
+    headers = {
+        "Authorization": f"Basic {basic}",
+        "User-Agent": USER_AGENT,
+    }
+    data = {"grant_type": "client_credentials"}
+
+    try:
+        response = requests.post("https://www.reddit.com/api/v1/access_token", headers=headers, data=data, timeout=10)
+        response.raise_for_status()
+        payload = response.json()
+        access_token = payload.get("access_token", "")
+        expires_in = int(payload.get("expires_in", 3600))
+        if not access_token:
+            return None
+
+        _TOKEN_CACHE["access_token"] = access_token
+        _TOKEN_CACHE["expires_at"] = now + max(expires_in - 60, 60)
+        logger.info("Using Reddit OAuth API for scraping")
+        return access_token
+    except Exception as exc:
+        logger.warning("OAuth token request failed; falling back to public JSON endpoints: %s", exc)
+        return None
+
+
 def _get(url: str, params: dict | None = None) -> dict | None:
     headers = {"User-Agent": USER_AGENT}
     try:
-        response = requests.get(url, params=params, headers=headers, timeout=10)
+        token = _get_oauth_token()
+        request_url = url
+
+        if token and url.startswith("https://www.reddit.com/"):
+            request_url = url.replace("https://www.reddit.com/", "https://oauth.reddit.com/", 1)
+            headers["Authorization"] = f"bearer {token}"
+
+        response = requests.get(request_url, params=params, headers=headers, timeout=10)
         response.raise_for_status()
         return response.json()
     except Exception as exc:
-        logger.warning("Request failed %s: %s", url, exc)
+        logger.warning("Request failed %s: %s", request_url, exc)
         return None
 
 
@@ -215,7 +275,7 @@ def write_raw_output(posts: list[dict]) -> str:
 # ---------------------------------------------------------------------------
 
 def run(subreddit_index_path: str = SUBREDDIT_INDEX_PATH) -> str:
-    logger.info("Scraper agent starting (no credentials required)")
+    logger.info("Scraper agent starting")
     subreddit_names = load_subreddit_index(subreddit_index_path)
 
     all_posts: list[dict] = []

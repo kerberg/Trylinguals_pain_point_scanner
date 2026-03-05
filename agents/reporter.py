@@ -44,7 +44,7 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-ANTHROPIC_API_KEY     = os.environ["ANTHROPIC_API_KEY"]
+ANTHROPIC_API_KEY     = os.environ.get("ANTHROPIC_API_KEY", "").strip()
 CLASSIFIED_OUTPUT_DIR = "output/classified"
 REPORTS_DIR           = "output/reports"
 MODEL                 = "claude-sonnet-4-20250514"
@@ -215,7 +215,7 @@ def get_reachable_shortlist(records: list[dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def generate_recommendation(
-    client: anthropic.Anthropic,
+    client: anthropic.Anthropic | None,
     hypothesis_status: dict,
     top_pain_points: list[dict],
     language_table: dict,
@@ -246,6 +246,12 @@ Data this week:
 {json.dumps(context, indent=2)}
 
 Respond in 3-5 sentences. Be specific. Reference the data. No preamble."""
+
+    if client is None:
+        return (
+            "ANTHROPIC_API_KEY is not configured, so the AI recommendation section was skipped. "
+            "Review sections 1-4 and select one manual experiment for the coming week."
+        )
 
     try:
         response = client.messages.create(
@@ -411,7 +417,7 @@ def run(classified_dir: str = CLASSIFIED_OUTPUT_DIR) -> str:
     Returns path to the written report file.
     """
     logger.info("Reporter agent starting")
-    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+    client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY) if ANTHROPIC_API_KEY else None
 
     date_str, records = load_latest_classified(classified_dir)
 

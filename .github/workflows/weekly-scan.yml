@@ -34,10 +34,23 @@ jobs:
       - name: Create output directories
         run: mkdir -p output/reports output/raw output/classified
 
+      - name: Validate Reddit credentials
+        env:
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+        run: |
+          if [ -z "$REDDIT_CLIENT_ID" ] || [ -z "$REDDIT_CLIENT_SECRET" ]; then
+            echo "REDDIT_CLIENT_ID and REDDIT_CLIENT_SECRET must be set in repository secrets."
+            echo "Without them, Reddit blocks GitHub-hosted runners with 403 on anonymous endpoints."
+            exit 1
+          fi
+
       - name: Run pipeline
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-          REDDIT_USER_AGENT: TryLinguals_PainPointScanner/1.0
+          REDDIT_CLIENT_ID: ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT: linux:com.trylinguals.painpointscanner:v1.1 (by /u/trylinguals_scanner)
           GIT_AUTHOR_NAME:     "TryLinguals Scanner"
           GIT_AUTHOR_EMAIL:    "scanner@trylinguals.com"
           GIT_COMMITTER_NAME:  "TryLinguals Scanner"
