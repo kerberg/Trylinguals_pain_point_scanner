@@ -2,22 +2,20 @@
 TryLinguals Pain Point Scanner — Pipeline Orchestrator
 ======================================================
 Runs the four-agent pipeline in sequence:
-  1. Discovery  (monthly — skipped in weekly run unless --run-discovery flag passed)
+  1. Discovery  — SKIPPED in CI. Run locally with --run-discovery to refresh.
+                  Subreddit list is hardcoded in knowledge/subreddit-index.json.
   2. Scraper    (weekly)
   3. Classifier (weekly)
   4. Reporter   (weekly)
 
 Usage:
   python main.py                     # weekly run (scrape → classify → report)
-  python main.py --run-discovery     # full run including subreddit discovery
-  python main.py --agent discovery   # run a single agent
+  python main.py --run-discovery     # refresh subreddit index (run locally, not in CI)
   python main.py --agent scraper
   python main.py --agent classifier
   python main.py --agent reporter
 
 Environment variables required:
-  REDDIT_CLIENT_ID
-  REDDIT_CLIENT_SECRET
   ANTHROPIC_API_KEY
 
 Optional:
@@ -31,14 +29,12 @@ import logging
 import sys
 from pathlib import Path
 
-# Load .env in local development. In GitHub Actions, secrets are injected as env vars.
 try:
     from dotenv import load_dotenv
     load_dotenv()
 except ImportError:
-    pass  # python-dotenv not installed — fine in CI
+    pass
 
-# Add agents directory to path
 sys.path.insert(0, str(Path(__file__).parent / "agents"))
 import discovery
 import scraper
@@ -52,15 +48,37 @@ logging.basicConfig(
 )
 logger = logging.getLogger("main")
 
+SUBREDDIT_INDEX = "knowledge/subreddit-index.json"
+
+
+def check_subreddit_index() -> bool:
+    """Return True if subreddit index exists and has at least one entry."""
+    try:
+        import json
+        with open(SUBREDDIT_INDEX) as f:
+            data = json.load(f)
+        return len(data.get("subreddits", [])) > 0
+    except Exception:
+        return False
+
 
 def run_weekly_pipeline(run_discovery: bool = False) -> None:
-    """Standard weekly execution path."""
-
     if run_discovery:
         logger.info("=== STAGE 1: Subreddit Discovery ===")
-        discovery.run()
+        logger.warning("NOTE: Discovery is blocked by Reddit from CI environments. "
+                       "Run locally if refreshing the subreddit list.")
+        try:
+            ranked = discovery.run()
+            if not ranked:
+                logger.warning("Discovery returned 0 subreddits. Using existing index.")
+        except Exception as exc:
+            logger.error("Discovery failed: %s. Continuing with existing index.", exc)
     else:
-        logger.info("=== STAGE 1: Subreddit Discovery (skipped — monthly only) ===")
+        logger.info("=== STAGE 1: Subreddit Discovery (skipped — using cached index) ===")
+
+    if not check_subreddit_index():
+        logger.error("No subreddit index found. Cannot continue.")
+        sys.exit(1)
 
     logger.info("=== STAGE 2: Content Scraper ===")
     raw_path = scraper.run()
@@ -78,7 +96,6 @@ def run_weekly_pipeline(run_discovery: bool = False) -> None:
 
 
 def run_single_agent(agent_name: str) -> None:
-    """Run one agent in isolation for debugging or re-runs."""
     agents = {
         "discovery":  discovery.run,
         "scraper":    scraper.run,
@@ -93,25 +110,17 @@ def run_single_agent(agent_name: str) -> None:
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(
-        description="TryLinguals Pain Point Scanner"
-    )
-    parser.add_argument(
-        "--run-discovery",
-        action="store_true",
-        help="Include subreddit discovery stage (monthly; skipped by default)",
-    )
-    parser.add_argument(
-        "--agent",
-        choices=["discovery", "scraper", "classifier", "reporter"],
-        help="Run a single agent instead of the full pipeline",
-    )
+    parser = argparse.ArgumentParser(description="TryLinguals Pain Point Scanner")
+    parser.add_argument("--run-discovery", action="store_true",
+                        help="Refresh subreddit index (run locally, not in CI)")
+    parser.add_argument("--agent",
+                        choices=["discovery", "scraper", "classifier", "reporter"],
+                        help="Run a single agent")
     return parser.parse_args()
 
 
 if __name__ == "__main__":
     args = parse_args()
-
     if args.agent:
         run_single_agent(args.agent)
     else:
