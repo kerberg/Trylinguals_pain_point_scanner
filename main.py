@@ -62,20 +62,7 @@ def check_subreddit_index() -> bool:
         return False
 
 
-def run_weekly_pipeline(run_discovery: bool = False) -> None:
-    if run_discovery:
-        logger.info("=== STAGE 1: Subreddit Discovery ===")
-        logger.warning("NOTE: Discovery is blocked by Reddit from CI environments. "
-                       "Run locally if refreshing the subreddit list.")
-        try:
-            ranked = discovery.run()
-            if not ranked:
-                logger.warning("Discovery returned 0 subreddits. Using existing index.")
-        except Exception as exc:
-            logger.error("Discovery failed: %s. Continuing with existing index.", exc)
-    else:
-        logger.info("=== STAGE 1: Subreddit Discovery (skipped — using cached index) ===")
-
+def run_weekly_pipeline() -> None:
     if not check_subreddit_index():
         logger.error("No subreddit index found. Cannot continue.")
         sys.exit(1)
@@ -123,5 +110,8 @@ if __name__ == "__main__":
     args = parse_args()
     if args.agent:
         run_single_agent(args.agent)
+    elif args.run_discovery:
+        logger.info("Running subreddit discovery (local only — not for CI).")
+        discovery.run()
     else:
-        run_weekly_pipeline(run_discovery=args.run_discovery)
+        run_weekly_pipeline()
