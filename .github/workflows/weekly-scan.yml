@@ -1,0 +1,77 @@
+name: Weekly Pain Point Scan
+
+on:
+  # Run every Monday at 06:00 UTC — fresh data before the work week starts
+  schedule:
+    - cron: '0 6 * * 1'
+
+  # Allow manual trigger from GitHub Actions UI
+  # Pass run_discovery: true on the first of the month to refresh the subreddit index
+  workflow_dispatch:
+    inputs:
+      run_discovery:
+        description: 'Run subreddit discovery (monthly refresh)'
+        required: false
+        default: 'false'
+        type: choice
+        options:
+          - 'false'
+          - 'true'
+
+jobs:
+  scan:
+    name: Run Pain Point Scanner
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    permissions:
+      contents: write   # Required to commit the report back to the repo
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          # Use token with write access for the commit step in reporter.py
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Create output directories
+        run: |
+          mkdir -p output/reports output/raw output/classified
+
+      - name: Run weekly pipeline
+        env:
+          REDDIT_CLIENT_ID:     ${{ secrets.REDDIT_CLIENT_ID }}
+          REDDIT_CLIENT_SECRET: ${{ secrets.REDDIT_CLIENT_SECRET }}
+          REDDIT_USER_AGENT:    ${{ secrets.REDDIT_USER_AGENT }}
+          ANTHROPIC_API_KEY:    ${{ secrets.ANTHROPIC_API_KEY }}
+          # Git identity for the commit step inside reporter.py
+          GIT_AUTHOR_NAME:      "TryLinguals Scanner"
+          GIT_AUTHOR_EMAIL:     "scanner@trylinguals.com"
+          GIT_COMMITTER_NAME:   "TryLinguals Scanner"
+          GIT_COMMITTER_EMAIL:  "scanner@trylinguals.com"
+        run: |
+          if [ "${{ github.event.inputs.run_discovery }}" = "true" ]; then
+            python main.py --run-discovery
+          else
+            python main.py
+          fi
+
+      - name: Upload raw and classified data as artifacts
+        # Retain for debugging — not committed to repo (excluded by .gitignore)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanner-data-${{ github.run_id }}
+          path: |
+            output/raw/
+            output/classified/
+          retention-days: 14
