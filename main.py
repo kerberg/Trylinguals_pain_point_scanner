@@ -36,10 +36,6 @@ except ImportError:
     pass
 
 sys.path.insert(0, str(Path(__file__).parent / "agents"))
-import discovery
-import scraper
-import classifier
-import reporter
 
 logging.basicConfig(
     level=logging.INFO,
@@ -49,6 +45,10 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 SUBREDDIT_INDEX = "knowledge/subreddit-index.json"
+
+
+def load_agent_module(name: str):
+    return __import__(name)
 
 
 def check_subreddit_index() -> bool:
@@ -68,32 +68,27 @@ def run_weekly_pipeline() -> None:
         sys.exit(1)
 
     logger.info("=== STAGE 2: Content Scraper ===")
-    raw_path = scraper.run()
+    raw_path = load_agent_module("scraper").run()
     logger.info("Raw output: %s", raw_path)
 
     logger.info("=== STAGE 3: Classifier ===")
-    classified_path = classifier.run()
+    classified_path = load_agent_module("classifier").run()
     logger.info("Classified output: %s", classified_path)
 
     logger.info("=== STAGE 4: Reporter ===")
-    report_path = reporter.run()
+    report_path = load_agent_module("reporter").run()
     logger.info("Report: %s", report_path)
 
     logger.info("Pipeline complete.")
 
 
 def run_single_agent(agent_name: str) -> None:
-    agents = {
-        "discovery":  discovery.run,
-        "scraper":    scraper.run,
-        "classifier": classifier.run,
-        "reporter":   reporter.run,
-    }
-    if agent_name not in agents:
-        logger.error("Unknown agent: %s. Choose from: %s", agent_name, list(agents))
+    agent_names = ["discovery", "scraper", "classifier", "reporter"]
+    if agent_name not in agent_names:
+        logger.error("Unknown agent: %s. Choose from: %s", agent_name, agent_names)
         sys.exit(1)
     logger.info("Running single agent: %s", agent_name)
-    agents[agent_name]()
+    load_agent_module(agent_name).run()
 
 
 def parse_args() -> argparse.Namespace:
@@ -112,6 +107,6 @@ if __name__ == "__main__":
         run_single_agent(args.agent)
     elif args.run_discovery:
         logger.info("Running subreddit discovery (local only — not for CI).")
-        discovery.run()
+        load_agent_module("discovery").run()
     else:
         run_weekly_pipeline()

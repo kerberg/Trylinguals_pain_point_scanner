@@ -27,7 +27,7 @@ Add these to your repo under Settings → Secrets → Actions:
 ```
 REDDIT_CLIENT_ID
 REDDIT_CLIENT_SECRET
-REDDIT_USER_AGENT      (e.g. TryLinguals_PainPointScanner/1.0)
+REDDIT_USER_AGENT      (e.g. linux:com.trylinguals.painpointscanner:v1.1 (by /u/your_reddit_username))
 ANTHROPIC_API_KEY
 ```
 
@@ -57,4 +57,10 @@ Weekly reports commit automatically to [`output/reports/`](output/reports/).
 
 ## GitHub Actions
 Runs every Monday at 06:00 UTC. Trigger manually from the Actions tab.
+
+> Note: GitHub-hosted runner IPs can still be rate-limited or blocked by Reddit at times.
+> This project now uses Reddit OAuth (client credentials) automatically when credentials are present,
+> which is significantly more reliable than anonymous `www.reddit.com/*.json` requests.
+> In GitHub Actions, `REDDIT_CLIENT_ID` and `REDDIT_CLIENT_SECRET` are required for scraping.
+> If they are missing, the workflow now fails early with a clear error instead of silently scraping zero posts.
 To include subreddit discovery (monthly refresh), select `run_discovery: true` in the manual trigger.
