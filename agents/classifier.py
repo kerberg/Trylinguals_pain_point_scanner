@@ -116,6 +116,12 @@ TRILINGUAL_SIGNAL_TIER — THIS IS THE PRIMARY SIGNAL FOR TRYLINGUALS. Assign ca
   TIER_1 — Three or more languages explicitly named in a family or child-raising context.
             Example: "We speak English, Japanese, and Portuguese at home — can't find any books."
             This is the highest-value record. These families have no existing product.
+            IMPORTANT: Parents rarely use the word "trilingual". Detect language combination
+            patterns instead. All of the following are TIER_1 signals:
+              - "English + Japanese household, she also goes to a French school"
+              - "we speak German at home and she attends a French immersion school, plus English"
+              - "my wife speaks Mandarin, I speak Portuguese, we live in the US"
+              - Any post naming three or more distinct languages in a parenting/family context.
   TIER_2 — Two languages named, with explicit frustration that a third is missing or that
             existing products don't cover their specific combination.
   TIER_3 — Two languages named, no trilingual frustration signal.
@@ -141,6 +147,20 @@ REACHABLE_PARENT — set true only when ALL of the following hold:
   2. Child age is in 0-6 range OR unknown
   3. Post is less than 30 days old (assume true unless evidence otherwise)
   4. Post is from a non-commercial account (no giveaways, no store links)
+
+FRUSTRATION PHRASE DETECTION — The following phrases are high-signal indicators of
+  FRUSTRATION_GAP or LANGUAGE_MAINTENANCE pain types. When present, weight hypothesis
+  matches toward H1, H2, and H3:
+    - "can't find books in"
+    - "no resources for"
+    - "books for [language combination]"
+    - "my kid stopped speaking"
+    - "losing their [language]"
+    - "heritage language loss"
+    - "only speaks English now"
+    - "refuses to speak"
+    - "nothing exists for"
+    - "does anyone know of books"
 
 NOISE_FLAG — set true when:
   - Post has academic/theoretical discussion with no practical parent question
