@@ -2,7 +2,7 @@
 Subreddit Discovery Agent
 =========================
 Purpose : Search Reddit for communities with high multilingual parenting signal density.
-          Produces a ranked subreddit list used by the Content Scraper.
+          Uses public Reddit JSON endpoints — no API credentials required.
 Schedule: Monthly (not weekly). Run manually or via cron on the 1st.
 
 Input  : Keyword clusters defined in KEYWORD_CLUSTERS below.
@@ -24,10 +24,8 @@ import math
 import os
 import time
 from datetime import datetime, timezone
-from typing import Any
 
-import praw
-from praw.models import Subreddit
+import requests
 
 logger = logging.getLogger(__name__)
 
@@ -35,74 +33,68 @@ logger = logging.getLogger(__name__)
 # Configuration
 # ---------------------------------------------------------------------------
 
-# Reddit API credentials come from environment variables.
-# In GitHub Actions these are repo secrets. Locally, load via python-dotenv.
-REDDIT_CLIENT_ID     = os.environ["REDDIT_CLIENT_ID"]
-REDDIT_CLIENT_SECRET = os.environ["REDDIT_CLIENT_SECRET"]
-REDDIT_USER_AGENT    = os.environ.get("REDDIT_USER_AGENT", "TryLinguals_PainPointScanner/1.0")
-
+# Polite user agent for public requests — no credentials needed
+USER_AGENT  = os.environ.get("REDDIT_USER_AGENT", "TryLinguals_PainPointScanner/1.0")
 OUTPUT_PATH = "knowledge/subreddit-index.json"
-
-# Maximum subreddits to retain in the ranked index.
 MAX_SUBREDDITS = 30
+REQUEST_PAUSE  = 2.0   # seconds between requests — stay polite
 
-# How many search result pages to pull per keyword cluster.
-SEARCH_LIMIT = 25
+# Reddit public search endpoint
+SUBREDDIT_SEARCH_URL = "https://www.reddit.com/subreddits/search.json"
 
-# Keyword clusters — each cluster targets one dimension of the hypothesis space.
-# Trilingual cluster carries 2x weight because trilingual families are the primary signal.
 KEYWORD_CLUSTERS: dict[str, dict] = {
     "bilingual_parenting": {
         "terms": [
             "bilingual parenting", "bilingual children", "raising bilingual",
-            "bilingual family", "bilingual kids", "bilingual toddler",
+            "bilingual family", "bilingual kids",
         ],
         "weight": 1.0,
     },
     "trilingual_parenting": {
         "terms": [
             "trilingual parenting", "trilingual children", "raising trilingual",
-            "multilingual family", "multilingual kids", "three languages",
-            "heritage language",
+            "multilingual family", "multilingual kids", "heritage language",
         ],
-        "weight": 2.0,  # Primary signal for TryLinguals — TIER_1 families live here
+        "weight": 2.0,  # Primary signal — TIER_1 families live here
     },
     "language_learning_children": {
         "terms": [
-            "language learning kids", "children language", "kids language books",
-            "foreign language children", "language immersion home",
+            "language learning kids", "children language", "language immersion home",
+            "kids second language",
         ],
         "weight": 1.0,
     },
     "multilingual_books": {
         "terms": [
             "bilingual books", "multilingual books", "bilingual children books",
-            "dual language books", "language books kids",
+            "dual language books",
         ],
-        "weight": 1.2,  # Directly validates H2 (books as desired format)
+        "weight": 1.2,  # Directly validates H2
     },
     "expat_immigrant_families": {
         "terms": [
             "expat parenting", "immigrant family language", "heritage language maintenance",
-            "minority language", "OPOL", "one parent one language",
+            "minority language", "OPOL one parent one language",
         ],
-        "weight": 1.5,  # High frustration-gap signal; underserved combos live here
+        "weight": 1.5,  # High frustration-gap signal
     },
 }
 
 
 # ---------------------------------------------------------------------------
-# Reddit client factory
+# HTTP helpers
 # ---------------------------------------------------------------------------
 
-def build_reddit_client() -> praw.Reddit:
-    """Read-only Reddit client. No authentication scope beyond public data needed."""
-    return praw.Reddit(
-        client_id=REDDIT_CLIENT_ID,
-        client_secret=REDDIT_CLIENT_SECRET,
-        user_agent=REDDIT_USER_AGENT,
-        read_only=True,
-    )
+def _get(url: str, params: dict | None = None) -> dict | None:
+    """GET with polite headers. Returns parsed JSON or None on failure."""
+    headers = {"User-Agent": USER_AGENT}
+    try:
+        response = requests.get(url, params=params, headers=headers, timeout=10)
+        response.raise_for_status()
+        return response.json()
+    except Exception as exc:
+        logger.warning("Request failed for %s: %s", url, exc)
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -110,40 +102,39 @@ def build_reddit_client() -> praw.Reddit:
 # ---------------------------------------------------------------------------
 
 def search_subreddits_for_cluster(
-    reddit: praw.Reddit,
     cluster_name: str,
     cluster_config: dict,
 ) -> dict[str, dict]:
     """
-    Search Reddit subreddit listings for a single keyword cluster.
-
-    Returns a dict keyed by subreddit name with raw metadata.
-    Does not apply scoring — that happens in rank_subreddits().
+    Search Reddit's public subreddit search for a single keyword cluster.
+    Returns dict keyed by subreddit name with raw metadata.
     """
     found: dict[str, dict] = {}
 
     for term in cluster_config["terms"]:
-        try:
-            results = reddit.subreddits.search(term, limit=SEARCH_LIMIT)
-            for sub in results:
-                if sub.name not in found:
-                    found[sub.name] = {
-                        "name": sub.display_name,
-                        "title": sub.title,
-                        "description": (sub.public_description or "")[:300],
-                        "subscribers": sub.subscribers or 0,
-                        "cluster_hits": {},
-                    }
-                # Track which cluster hit this subreddit and how many terms matched
-                hits = found[sub.name]["cluster_hits"]
-                hits[cluster_name] = hits.get(cluster_name, 0) + 1
-
-            # Respect Reddit's rate limit — 60 requests/min for read-only
-            time.sleep(1.0)
-
-        except Exception as exc:
-            logger.warning("Search failed for term '%s': %s", term, exc)
+        data = _get(SUBREDDIT_SEARCH_URL, params={"q": term, "limit": 25, "type": "sr"})
+        if not data:
             continue
+
+        children = data.get("data", {}).get("children", [])
+        for child in children:
+            sub = child.get("data", {})
+            name = sub.get("display_name", "")
+            if not name:
+                continue
+
+            if name not in found:
+                found[name] = {
+                    "name":        name,
+                    "title":       sub.get("title", ""),
+                    "description": (sub.get("public_description") or "")[:300],
+                    "subscribers": sub.get("subscribers") or 0,
+                    "cluster_hits": {},
+                }
+            hits = found[name]["cluster_hits"]
+            hits[cluster_name] = hits.get(cluster_name, 0) + 1
+
+        time.sleep(REQUEST_PAUSE)
 
     return found
 
@@ -151,29 +142,18 @@ def search_subreddits_for_cluster(
 def compute_signal_score(sub_data: dict) -> float:
     """
     Signal score = log-scaled subscriber base × cluster hit multiplier.
-
-    Rationale:
-      - Large generic subs (r/Parenting) dilute signal with off-topic noise.
-        Log scaling prevents them from dominating.
-      - Trilingual-cluster hits apply 2x weight (see KEYWORD_CLUSTERS).
-      - Multiple cluster hits compound additively, not multiplicatively,
-        to avoid over-weighting fringe subs that match every term.
+    Trilingual cluster hits apply 2x weight.
     """
-    subscriber_base = math.log10(max(sub_data["subscribers"], 10))  # floor at 10
-
+    subscriber_base = math.log10(max(sub_data["subscribers"], 10))
     cluster_score = 0.0
     for cluster_name, hit_count in sub_data["cluster_hits"].items():
         weight = KEYWORD_CLUSTERS[cluster_name]["weight"]
         cluster_score += weight * hit_count
-
     return round(subscriber_base * cluster_score, 4)
 
 
 def rank_subreddits(all_subs: dict[str, dict]) -> list[dict]:
-    """
-    Apply scoring, sort descending, return top MAX_SUBREDDITS.
-    Strips internal cluster_hits from output — not needed downstream.
-    """
+    """Score, sort descending, return top MAX_SUBREDDITS."""
     scored = []
     for name, data in all_subs.items():
         score = compute_signal_score(data)
@@ -187,10 +167,8 @@ def rank_subreddits(all_subs: dict[str, dict]) -> list[dict]:
 
     scored.sort(key=lambda x: x["signal_score"], reverse=True)
     top = scored[:MAX_SUBREDDITS]
-
     for rank, sub in enumerate(top, start=1):
         sub["rank"] = rank
-
     return top
 
 
@@ -199,12 +177,11 @@ def rank_subreddits(all_subs: dict[str, dict]) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 def write_subreddit_index(subreddits: list[dict]) -> None:
-    """Write ranked list to knowledge/subreddit-index.json."""
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     payload = {
-        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "generated_at":    datetime.now(timezone.utc).isoformat(),
         "subreddit_count": len(subreddits),
-        "subreddits": subreddits,
+        "subreddits":      subreddits,
     }
     with open(OUTPUT_PATH, "w", encoding="utf-8") as fh:
         json.dump(payload, fh, indent=2, ensure_ascii=False)
@@ -216,18 +193,12 @@ def write_subreddit_index(subreddits: list[dict]) -> None:
 # ---------------------------------------------------------------------------
 
 def run() -> list[dict]:
-    """
-    Execute the discovery pipeline end-to-end.
-    Returns the ranked subreddit list (also written to disk).
-    """
-    logger.info("Discovery agent starting — scanning %d keyword clusters", len(KEYWORD_CLUSTERS))
-    reddit = build_reddit_client()
+    logger.info("Discovery agent starting — %d keyword clusters", len(KEYWORD_CLUSTERS))
 
     merged: dict[str, dict] = {}
     for cluster_name, cluster_config in KEYWORD_CLUSTERS.items():
         logger.info("Searching cluster: %s", cluster_name)
-        found = search_subreddits_for_cluster(reddit, cluster_name, cluster_config)
-        # Merge: if sub already seen, accumulate cluster_hits
+        found = search_subreddits_for_cluster(cluster_name, cluster_config)
         for name, data in found.items():
             if name not in merged:
                 merged[name] = data
@@ -239,7 +210,7 @@ def run() -> list[dict]:
 
     ranked = rank_subreddits(merged)
     write_subreddit_index(ranked)
-    logger.info("Discovery complete. Top subreddit: r/%s (score: %s)",
+    logger.info("Discovery complete. Top: r/%s (score: %s)",
                 ranked[0]["name"], ranked[0]["signal_score"])
     return ranked
 
